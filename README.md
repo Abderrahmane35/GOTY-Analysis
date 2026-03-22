@@ -5,17 +5,15 @@
 
 ---
 
-## 📋 Overview
+## Overview
 
 This project explores a decade of **The Game Awards** (2014–2024) nominations and results to answer one question: **what actually makes a game win GOTY?**
-
-Spoiler: it's not the MetaScore.
 
 Using a logistic regression model trained on 62 nominees (11 winners), the analysis shows that **community engagement** (votes, popularity) is a far stronger predictor than critical acclaim. The model is evaluated rigorously with LOOCV to avoid the optimism bias of in-sample accuracy, and tested externally on **Clair Obscur: Expedition 33** (GOTY 2025).
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 goty-analysis/
@@ -53,7 +51,7 @@ Every GOTY nominee and winner from The Game Awards over a full decade.
 | `Nominations` | Total number of TGA nominations received that year |
 | `Wins` | GOTY winner: `1` = won, `0` = did not win |
 
-### ⚠️ Important Caveats
+###  Important Caveats
 
 1. **Genre classification** is subjective for some titles and based on TGA's own categories.
 2. **Release dates** are sourced from Metacritic and may reflect regional launch dates (e.g., Persona 5 shows its 2016 Japan release).
@@ -77,7 +75,7 @@ Every GOTY nominee and winner from The Game Awards over a full decade.
 - **Preprocessing**: centering and scaling (`caret::preProcess`)
 - **Family**: `binomial` via `glm()`
 
-### 3. Model Evaluation — LOOCV
+### 3. Model Evaluation : Leave-One-Out Cross-Validation
 Given the small dataset (n=62, only 11 positives), a standard train/test split is not appropriate. The project uses **Leave-One-Out Cross-Validation** (`boot::cv.glm`, K=n) to get an unbiased accuracy estimate.
 
 Metrics reported:
@@ -86,12 +84,12 @@ Metrics reported:
 - Specificity
 - Confusion matrix
 
-### 4. External Test — GOTY 2025
+### 4. External Test : GOTY 2025
 The trained model is applied to **Clair Obscur: Expedition 33** (actual GOTY 2025, not in the training set) using the same preprocessing pipeline, to test out-of-sample generalization.
 
 ---
 
-## 📦 Requirements
+##  Requirements
 
 ### R packages
 
@@ -110,7 +108,7 @@ install.packages(c("dplyr", "ggplot2", "gridExtra", "tidyr", "caret", "boot"))
 
 ---
 
-## 🚀 How to Run
+##  How to Run
 
 1. **Clone the repository**
    ```bash
@@ -133,7 +131,7 @@ install.packages(c("dplyr", "ggplot2", "gridExtra", "tidyr", "caret", "boot"))
 
 ---
 
-## 📈 Key Findings
+## Key Findings
 
 | Finding | Value |
 |---|---|
@@ -145,11 +143,11 @@ install.packages(c("dplyr", "ggplot2", "gridExtra", "tidyr", "caret", "boot"))
 | Least predictive variable | MetaScore (critic score) |
 | Best genre win rate | RPG (26.7%) |
 | Most awarded publisher | PlayStation (3 wins) |
-| External test (GOTY 2025) | ✅ Clair Obscur correctly predicted |
+| External test (GOTY 2025) | ✅lair Obscur correctly predicted |
 
 ---
 
-## 📄 License
+##  License
 
 This project is released under the [MIT License](LICENSE).  
 The dataset is sourced from Kaggle and used for educational and research purposes.
@@ -158,7 +156,7 @@ The dataset is sourced from Kaggle and used for educational and research purpose
 
 ## 🙏 Acknowledgements
 
-- Dataset originally published on [Kaggle](https://www.kaggle.com/)
+- Dataset originally published on [Kaggle](https://www.kaggle.com/datasets/alejandrobelda/games-awards-nominees-2014-2024?resource=download)
 - [The Game Awards](https://thegameawards.com/) for the underlying nomination and winner data
 - [Metacritic](https://www.metacritic.com/) for critic and user scores
 - [Google Trends](https://trends.google.com/) for popularity data
