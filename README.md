@@ -18,24 +18,24 @@ Using a logistic regression model trained on 62 nominees (11 winners), the analy
 ```
 goty-analysis/
 │
-├── README.md                  ← You are here
+├── README.md                  
 │
 ├── src/
-│   └── GOTY_Analyse.Rmd       ← Main R Markdown analysis
+│   └── GOTY_Analyse.Rmd
 │
 └── data/
-    └── GOTY.csv               ← Dataset (see description below)
+    └── GOTY.csv
 ```
 
 ---
 
-## 📊 Dataset Description
+## Dataset Description
 
 **Games Awards Nominees 2014–2024**  
 Every GOTY nominee and winner from The Game Awards over a full decade.
 
 | Column | Description |
-|---|---|
+
 | `Name` | Title of the game |
 | `Developer` | Development studio |
 | `Publisher` | Publishing company |
@@ -62,7 +62,7 @@ Every GOTY nominee and winner from The Game Awards over a full decade.
 
 ---
 
-## 🔬 Methodology
+## Methodology
 
 ### 1. Exploratory Analysis
 - Genre distribution and win rates
@@ -143,7 +143,7 @@ install.packages(c("dplyr", "ggplot2", "gridExtra", "tidyr", "caret", "boot"))
 | Least predictive variable | MetaScore (critic score) |
 | Best genre win rate | RPG (26.7%) |
 | Most awarded publisher | PlayStation (3 wins) |
-| External test (GOTY 2025) | ✅lair Obscur correctly predicted |
+| External test (GOTY 2025) | Clair Obscur correctly predicted |
 
 ---
 
@@ -154,7 +154,7 @@ The dataset is sourced from Kaggle and used for educational and research purpose
 
 ---
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
 - Dataset originally published on [Kaggle](https://www.kaggle.com/datasets/alejandrobelda/games-awards-nominees-2014-2024?resource=download)
 - [The Game Awards](https://thegameawards.com/) for the underlying nomination and winner data
