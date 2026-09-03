@@ -37,7 +37,9 @@ Les coefficients standardisés donnent les associations les plus fortes à `Vote
 
 **Répartition des jeux par genre et nombre de victoires par éditeur**
 
-![](images/clipboard-2519996779.png){width="327"}
+![](images/clipboard-2519996779.png){width="714"}
+
+![](images/clipboard-971317849.png)
 
 ![](images/clipboard-971317849.png){width="336"}
 
