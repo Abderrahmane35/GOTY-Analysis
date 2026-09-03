@@ -37,11 +37,9 @@ Les coefficients standardisés donnent les associations les plus fortes à `Vote
 
 **Répartition des jeux par genre et nombre de victoires par éditeur**
 
-![](images/clipboard-2519996779.png){width="714"}
+![](images/clipboard-2519996779.png)
 
 ![](images/clipboard-971317849.png)
-
-![](images/clipboard-971317849.png){width="336"}
 
 Ce graphique montre la répartition des jeux analysés selon leur genre. Les jeux d'action-aventure sont les plus représentés dans l'échantillon et l'éditeur ayant remporté le plus de trophées est Playstation.
 
@@ -50,6 +48,12 @@ Ce graphique montre la répartition des jeux analysés selon leur genre. Les jeu
 ![](images/clipboard-696066994.png)
 
 Ce graphique présente les jeux auxquels le modèle final attribue les probabilités de victoire les plus élevées. A titre de comparaison, **Clair Obscur: Expedition 33** (le vainqueur du trophée en 2025) obtient une probabilité de victoire de 90.7% par notre modèle, se glissant en deuxième position de ce classement.
+
+**Distribution du Meta Score selon la victoire**
+
+![](images/clipboard-691151523.png)
+
+Les gagnants et les non-gagnants sont comparés selon leur `Meta Score`. Le boxplot permet d'observer que le groupe de gagnants obtient en moyenne un Meta Score supérieur au groupe Non-gagnant sur notre échantillon.
 
 **Corrélations entre les variables**
 
@@ -62,12 +66,6 @@ La matrice de corrélation permet d'identifier les relations entre les variables
 ![](images/clipboard-4011598849.png)
 
 `Votes` et `Popularity` présentent les coefficients positifs les plus élevés, tandis que `Reviews` présente une association négative estimée.
-
-**Distribution du Meta Score selon la victoire**
-
-![](images/clipboard-691151523.png)
-
-Les gagnants et les non-gagnants sont comparés selon leur `Meta Score`. Le boxplot permet d'observer que le groupe de gagnants obtient en moyenne un Meta Score supérieur au groupe Non-gagnant sur notre échantillon.
 
 **Performance ROC du modèle**
 
