@@ -1,7 +1,7 @@
 ---
 title: "Analyse GOTY 2014-2024"
 author: "Abde"
-date: "2026-01-12"
+date: "2026-09-03"
 output: html_document
 ---
 
@@ -12,21 +12,17 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ## Importation et configuration
 
 ```{r}
-# Imports des librairies
-library(dplyr)
-library(ggplot2)
-library(gridExtra)
-library(tidyr)
-library(caret)
-
-# Installation 
-packages <- c("ggplot2", "dplyr", "tidyr", "gridExtra", "scales", "caret")
+# Installation/chargement des librairies nécessaires
+packages <- c(
+  "ggplot2", "dplyr", "tidyr", "gridExtra",
+  "scales", "caret", "car", "pROC"
+)
 
 install_if_missing <- function(pkg) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, repos = "http://cran.rstudio.com/")
-    library(pkg, character.only = TRUE)
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg, repos = "https://cloud.r-project.org")
   }
+  library(pkg, character.only = TRUE)
 }
 
 invisible(lapply(packages, install_if_missing))
@@ -36,34 +32,41 @@ invisible(lapply(packages, install_if_missing))
 
 ```{r}
 # Récupération des données
-data <- read.csv("data/GOTY.csv", sep = ',', header = TRUE)
+data <- read.csv("../data/GOTY.csv", sep = ",", header = TRUE)
 
 # Nettoyage des données
-data$Votes <- data$Votes * 1000  # Convertir en nombre entier
+data$Votes <- data$Votes * 1000  
 data$Genre <- as.factor(data$Genre)
+
+stopifnot(all(c(
+  "Name", "Genre", "Publisher", "Meta.Score", "User.Score",
+  "Reviews", "Nominations", "Votes", "Popularity", "Wins"
+) %in% names(data)))
 ```
 
-# Statistiques descriptives
+# I/ Statistiques descriptives
 
 ```{r}
-cat("STATISTIQUES GÉNÉRALES\n")
-cat(sprintf("Nombre total de jeux analysés: %d\n", nrow(data)))
-cat(sprintf("Nombre de gagnants GOTY: %d\n", sum(data$Wins == 1)))
-cat(sprintf("Taux de victoire: %.1f%%\n\n", mean(data$Wins == 1) * 100))
+cat(sprintf("Nombre total de jeux analysés : %d\n", nrow(data)))
+cat(sprintf("Nombre de gagnants GOTY : %d\n", sum(data$Wins == 1)))
+cat(sprintf("Taux de victoire : %.1f%%\n\n", mean(data$Wins == 1) * 100))
 
 winners <- data %>% filter(Wins == 1)
+
 cat("LES GAGNANTS (MetaScore) :\n")
-for(i in 1:nrow(winners)) {
+for (i in 1:nrow(winners)) {
   cat(sprintf("  - %s (%d/100)\n", winners$Name[i], winners$Meta.Score[i]))
 }
 
-data |> filter(Wins == 1) |> summarise(mean(Meta.Score))
+data %>%
+  filter(Wins == 1) %>%
+  summarise(MetaScore_moyen = mean(Meta.Score))
 ```
 
-> **Lecture des statistiques.** Sur les 62 jeux nominés entre 2014 et 2024, seulement 11 ont remporté le titre, soit un taux de victoire de 17,7 %. Le MetaScore des gagnants est en moyenne de 92, ce qui indique qu'un score très élevé est nécessaire mais non suffisant pour gagner. On note notamment que Dragon Age: Inquisition (85/100, 2014) a remporté le titre avec le MetaScore le plus bas du palmarès, suggérant que d'autres facteurs jouent un rôle prépondérant.
+> Sur les 62 jeux nominés entre 2014 et 2024, seulement 11 ont remporté le titre, soit un taux de victoire de 17,7 %. Le MetaScore moyen des gagnants est de 92. On note notamment que Dragon Age: Inquisition (85/100, 2014) a remporté le titre avec le MetaScore le plus bas du palmarès.
 
 ```{r echo=FALSE}
-# Calcul du tableau de comparaison (réutilisé dans les sections suivantes)
+# Tableau descriptif de comparaison entre gagnants et non-gagnants
 comparison <- data %>%
   group_by(Wins) %>%
   summarise(
@@ -73,18 +76,30 @@ comparison <- data %>%
     Nominations = mean(Nominations),
     Votes_k     = mean(Votes) / 1000,
     Popularity  = mean(Popularity),
-    .groups = 'drop'
+    .groups = "drop"
   )
 
-theme_goty <- theme_minimal() +
+theme_goty <- theme_classic(base_size = 11) +
   theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    axis.title    = element_text(face = "bold"),
-    legend.position = "right"
+    plot.title = element_text(face = "bold", size = 14, margin = margin(b = 8)),
+    plot.subtitle = element_text(size = 10, margin = margin(b = 12)),
+    axis.title = element_text(size = 10),
+    axis.text = element_text(size = 9),
+    legend.position = "right",
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_line(linewidth = 0.25, colour = "grey88"),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(10, 14, 10, 10)
   )
+
+accent_main <- "#2F6BFF"
+accent_positive <- "#2F6BFF"
+accent_negative <- "#D95F59"
+accent_neutral <- "#A8B0BC"
+accent_reference <- "#7C8798"
 ```
 
-## Analyse par genre
+## 1. Analyse par genre
 
 ```{r}
 genre_stats <- data %>%
@@ -94,36 +109,45 @@ genre_stats <- data %>%
     Jeux_totaux = n(),
     Meta_Score_moyen = mean(Meta.Score),
     Taux_victoire = (sum(Wins == 1) / n()) * 100,
-    .groups = 'drop'
+    .groups = "drop"
   ) %>%
   arrange(desc(Victoires))
 
 print(genre_stats)
 ```
 
-```{r fig.width=10, fig.height=4}
-genre_counts <- data %>% count(Genre)
+```{r fig.width=8, fig.height=5}
+genre_counts <- data %>%
+  count(Genre, name = "Jeux") %>%
+  arrange(desc(Jeux))
 
-p_genre_pie <- ggplot(genre_counts, aes(x = "", y = n, fill = Genre)) +
-  geom_bar(stat = "identity", width = 1) +
-  coord_polar("y", start = 0) +
-  labs(title = "Répartition par Genre") +
-  theme_void() +
-  theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+genre_counts <- genre_counts %>%
+  mutate(
+    Mise_en_avant = Jeux == max(Jeux)
+  )
 
-p_genre_win <- ggplot(genre_stats, aes(x = reorder(Genre, Taux_victoire), y = Taux_victoire, fill = Genre)) +
-  geom_bar(stat = "identity", alpha = 0.8, show.legend = FALSE) +
+p_genre_counts <- ggplot(
+  genre_counts,
+  aes(x = reorder(Genre, Jeux), y = Jeux, fill = Mise_en_avant)
+) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = Jeux), hjust = -0.15, size = 3.5) +
+  scale_fill_manual(values = c(`FALSE` = accent_neutral, `TRUE` = accent_main)) +
   coord_flip() +
-  labs(title = "Taux de victoire par Genre",
-       x = "", y = "Taux de victoire (%)") +
+  labs(
+    title = "Nombre de jeux nominés par genre",
+    x = "",
+    y = "Nombre de jeux"
+  ) +
+  expand_limits(y = max(genre_counts$Jeux) * 1.1) +
   theme_goty
 
-grid.arrange(p_genre_pie, p_genre_win, ncol = 2)
+p_genre_counts
 ```
 
-> **Lecture des graphiques.** Le dataset est largement dominé par l'Action-Adventure (35 jeux sur 62, soit \~56 %), ce qui reflète la tendance de l'industrie sur la décennie. En termes de conversions, les RPGs s'imposent comme le genre le plus compétitif avec un taux de victoire de **26,7 %**, devant l'Action-Adventure (17,1 %). Ce résultat s'explique par la nature narrative et immersive du RPG, qui génère un fort attachement communautaire, facteur déterminant dans le vote GOTY comme nous allons le voir par la suite. Les genres Simulation, Fighting et Strategy ne remportent aucun titre, possiblement par manque de représentativité dans l'échantillon (1 à 2 jeux chacun).
+> Le dataset est largement dominé par le genre Action-Adventure (35 jeux sur 62, soit environ 56 %). Cette répartition décrit avant tout la composition de l'échantillon. Les écarts de taux de victoire entre genres doivent être interprétés avec prudence, car plusieurs catégories reposent sur de très faibles effectifs.
 
-## Top éditeurs
+## 2. Top éditeurs
 
 ```{r}
 pub_stats <- data %>%
@@ -131,7 +155,7 @@ pub_stats <- data %>%
   summarise(
     Victoires = sum(Wins == 1),
     Jeux_nominés = n(),
-    .groups = 'drop'
+    .groups = "drop"
   ) %>%
   filter(Victoires > 0) %>%
   arrange(desc(Victoires))
@@ -140,333 +164,659 @@ print(pub_stats)
 ```
 
 ```{r fig.width=7, fig.height=4}
-ggplot(pub_stats, aes(x = reorder(Publisher, Victoires), y = Victoires)) +
-  geom_bar(stat = "identity", fill = "#9b59b6", alpha = 0.8) +
+pub_stats <- pub_stats %>%
+  mutate(
+    Mise_en_avant = Victoires == max(Victoires)
+  )
+
+ggplot(pub_stats, aes(x = reorder(Publisher, Victoires), y = Victoires, fill = Mise_en_avant)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c(`FALSE` = accent_neutral, `TRUE` = accent_main)) +
   coord_flip() +
-  labs(title = "Top Publishers (Victoires GOTY)",
-       x = "", y = "Nombre de victoires GOTY") +
+  labs(
+    title = "Nombre de victoires par éditeur",
+    x = "",
+    y = "Nombre de victoires"
+  ) +
   theme_goty
 ```
 
-> **Lecture du graphique.** PlayStation domine le palmarès avec 3 victoires et Electronic Arts suit avec 2 victoires. On note que la majorité des éditeurs gagnants n'ont remporté qu'une seule fois le titre, ce qui souligne la compétitivité de l'Award et l'absence de monopole éditorial. Nintendo, malgré 10 nominations, ne compte qu'une victoire (Zelda: BotW 2017), signe que la quantité de nominations ne garantit pas la domination.
+> PlayStation domine le palmarès avec 3 victoires et Electronic Arts suit avec 2 victoires. Ces fréquences sont utiles pour décrire l'historique observé, mais elles ne suffisent pas à conclure à un avantage causal d'un éditeur. On remarque que malgré 10 nominations, Nintendo n'a remporté qu'une fois le trophée.
 
-## Modèle prédictif (Régression Logistique)
+## II/ Multicolinéarité
+
+La régression logistique utilise six variables explicatives : MetaScore, User Score, Reviews, Nominations, Votes et Popularity. Avant d'interpréter les coefficients, il est important de vérifier si certaines variables portent une information très redondante.
+
+### 1. Matrice de corrélations
+
+```{r fig.width=8, fig.height=7}
+predictors <- data %>%
+  select(Meta.Score, User.Score, Reviews, Nominations, Votes, Popularity)
+
+cor_matrix <- cor(predictors, use = "pairwise.complete.obs")
+
+print(round(cor_matrix, 2))
+
+cor_df <- as.data.frame(as.table(cor_matrix)) %>%
+  rename(Variable_1 = Var1, Variable_2 = Var2, Correlation = Freq)
+
+ggplot(cor_df, aes(x = Variable_1, y = Variable_2, fill = Correlation)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.2f", Correlation)), size = 3.5) +
+  scale_fill_gradient2(
+    low = accent_negative,
+    mid = "white",
+    high = accent_main,
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "r"
+  ) +
+  coord_equal() +
+  labs(
+    title = "Corrélations entre variables explicatives",
+    x = "",
+    y = ""
+  ) +
+  theme_goty +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+> La matrice de corrélations permet d'identifier les variables qui évoluent de manière similaire. Dans notre cas, aucune trace de corrélation n'a été repéré, ce qui indique que chaque variable explicative apporte une information non redondante l'une de l'autre.
+
+### 2. VIF : Variance Inflation Factor
 
 ```{r}
-cat("MODÈLE PRÉDICTIF (Régression Logistique)\n")
+# Modèle préparatoire utilisé uniquement pour diagnostiquer la colinéarité
+vif_data <- data %>%
+  select(Meta.Score, User.Score, Reviews, Nominations, Votes, Popularity, Wins)
 
+vif_model <- glm(
+  Wins ~ Meta.Score + User.Score + Reviews +
+    Nominations + Votes + Popularity,
+  data = vif_data,
+  family = binomial
+)
 
-# Préparation des données pour le modèle
+vif_values <- car::vif(vif_model)
+
+vif_df <- data.frame(
+  Variable = names(vif_values),
+  VIF = as.numeric(vif_values)
+) %>%
+  arrange(desc(VIF))
+
+print(vif_df)
+```
+
+Les résultats ne montrent pas de multicolinéarité forte dans cet échantillon. La VIF la plus élevée est celle de User Score (2,85) qui reste bien en dessous du seuil de 5 généralement utilisé pour signaler une possible multicolinéarité.
+
+## III/ Modèle prédictif : Régression Logistique
+
+```{r}
+cat("MODÈLE PRÉDICTIF : Régression Logistique\n")
+
+# Variables utilisées dans le modèle
 model_data <- data %>%
   select(Meta.Score, User.Score, Reviews, Nominations, Votes, Popularity, Wins)
 
-# Normalisation des features (centrage-réduction)
+# Standardisation des variables explicatives pour rendre les coefficients comparables
 preprocess <- preProcess(model_data[, -7], method = c("center", "scale"))
 model_data_scaled <- predict(preprocess, model_data[, -7])
 model_data_scaled$Wins <- model_data$Wins
 
-# Modèle de régression logistique
-logit_model <- glm(Wins ~ ., data = model_data_scaled, family = binomial)
+# Modèle final sur l'ensemble des données :
+# les coefficients sont interprétés sur l'échelle standardisée des prédicteurs.
+logit_model <- glm(
+  Wins ~ Meta.Score + User.Score + Reviews +
+    Nominations + Votes + Popularity,
+  data = model_data_scaled,
+  family = binomial
+)
 
-# Coefficients et importance relative (part de la valeur absolue totale)
+# Coefficients standardisés (les prédicteurs ont été centrés-réduits)
 coef_df <- data.frame(
   Feature = names(coef(logit_model))[-1],
-  Coefficient = coef(logit_model)[-1],
-  Importance = abs(coef(logit_model)[-1]) / sum(abs(coef(logit_model)[-1])) * 100
+  Coefficient = unname(coef(logit_model)[-1])
 ) %>%
-  arrange(desc(Importance))
+  arrange(desc(abs(Coefficient)))
 
-cat(" Facteurs prédictifs (par ordre d'importance):\n")
-for(i in 1:nrow(coef_df)) {
-  direction <- ifelse(coef_df$Coefficient[i] > 0, "↑", "↓")
-  cat(sprintf("  %s %s: %.1f%%\n", 
-              direction,
-              coef_df$Feature[i],
-              coef_df$Importance[i]))
+cat("Coefficients associés aux variables explicatives standardisées :\n")
+for (i in 1:nrow(coef_df)) {
+  direction <- ifelse(coef_df$Coefficient[i] > 0, "positif", "négatif")
+  cat(sprintf(
+    "  - %s : β = %.3f (%s)\n",
+    coef_df$Feature[i],
+    coef_df$Coefficient[i],
+    direction
+  ))
+}
+```
+
+> Les coefficients présentés sont associés à des variables explicatives standardisées. Leur valeur absolue permet de comparer l'amplitude des associations estimées entre les prédicteurs.
+>
+> Le signe négatif de Reviews ne signifie pas forcément que les critiques diminuent la probabilité de victoire dans la réalité. Il peut refléter la structure particulière de cet échantillon et la combinaison des variables introduites dans le modèle.
+
+### 1. P-values 
+
+```{r}
+model_summary <- summary(logit_model)
+
+coef_inference <- data.frame(
+  Variable = rownames(coef(model_summary)),
+  Estimate = coef(model_summary)[, "Estimate"],
+  Std_Error = coef(model_summary)[, "Std. Error"],
+  z_value = coef(model_summary)[, "z value"],
+  p_value = coef(model_summary)[, "Pr(>|z|)"]
+) %>%
+  filter(Variable != "(Intercept)")
+
+print(coef_inference)
+```
+
+Les coefficients standardisés suggèrent que Votes et Popularity présentent les associations positives les plus fortes avec la victoire, tandis que Reviews présente une association négative estimée. Les p-values invitent toutefois à rester prudents : seule Popularity est sous le seuil conventionnel de 5 % (p = 0,047), dans un échantillon limité à 62 jeux et 11 gagnants.
+
+### 2. Évaluation du modèle : Leave One Out CV
+
+La validation Leave-One-Out Cross-Validation est utilisée en raison de la petite taille de l'échantillon. Pour éviter un data leakage, la standardisation est recalculée à l'intérieur de chaque fold : l'observation laissée de côté n'intervient donc pas dans le calcul de la moyenne et de l'écart-type utilisés pour la transformer.
+
+```{r}
+# Utilisées pour visualiser le modèle final, mais pas pour évaluer sa généralisation.
+predictions_resub <- predict(logit_model, newdata = model_data_scaled, type = "response")
+
+data$Prob_Win <- predictions_resub * 100
+data$Predicted_Win <- ifelse(predictions_resub > 0.5, 1, 0)
+
+#LOOCV manuelle avec standardisation à l'intérieur de chaque fold
+set.seed(123)
+
+n <- nrow(model_data)
+loocv_probs <- numeric(n)
+
+for (i in seq_len(n)) {
+
+  train_raw <- model_data[-i, ]
+  test_raw  <- model_data[i, , drop = FALSE]
+
+  # Standardisation calculée uniquement sur le jeu d'entraînement
+  prep_i <- preProcess(
+    train_raw[, -7],
+    method = c("center", "scale")
+  )
+
+  train_scaled <- predict(prep_i, train_raw[, -7])
+  test_scaled  <- predict(prep_i, test_raw[, -7])
+
+  train_scaled$Wins <- train_raw$Wins
+
+  fit_i <- glm(
+    Wins ~ Meta.Score + User.Score + Reviews +
+      Nominations + Votes + Popularity,
+    data = train_scaled,
+    family = binomial
+  )
+
+  loocv_probs[i] <- predict(
+    fit_i,
+    newdata = test_scaled,
+    type = "response"
+  )
 }
 
-# ── 1. Prédictions en resubstitution (sur les données d'entraînement) ────────
-# Sert uniquement à récupérer Prob_Win pour les visualisations — PAS à mesurer la précision
-predictions <- predict(logit_model, newdata = model_data_scaled, type = "response")
-data$Prob_Win     <- predictions * 100
-data$Predicted_Win <- ifelse(predictions > 0.5, 1, 0)
+# Classification au seuil 0,5
+loocv_class <- ifelse(loocv_probs > 0.5, 1, 0)
+y_true <- model_data$Wins
 
-# ── 2. Validation Leave-One-Out (LOOCV) ──────────────────────────────────────
-# Méthode adaptée aux petits datasets : on entraîne n=62 modèles en excluant
-# à chaque fois une observation, puis on prédit l'observation exclue.
-# Cela évite le biais d'optimisme de la resubstitution.
-library(boot)
+# Matrice de confusion LOOCV
+cm <- table(
+  Prédit = factor(loocv_class, levels = c(0, 1)),
+  Réel = factor(y_true, levels = c(0, 1))
+)
 
-cost_fn <- function(y, pred) mean((pred > 0.5) != y)   # taux d'erreur de classification
-
-loocv_result  <- cv.glm(data    = model_data_scaled,
-                         glmfit  = logit_model,
-                         cost    = cost_fn,
-                         K       = nrow(model_data_scaled))  # K = n → LOOCV
-
-accuracy_resub <- mean(data$Predicted_Win == as.numeric(as.character(data$Wins)))
-accuracy_loocv <- 1 - loocv_result$delta[1]
-
-cat("=== ÉVALUATION DU MODÈLE ===\n\n")
-cat(sprintf("  Précision resubstitution : %.1f%%  ← biais optimiste\n", accuracy_resub * 100))
-cat(sprintf("  Précision LOOCV          : %.1f%%  ← estimation réelle\n", accuracy_loocv * 100))
-cat(sprintf("  Biais d'optimisme        : +%.1f pts\n\n",
-            (accuracy_resub - accuracy_loocv) * 100))
-
-# ── 3. Prédictions LOOCV individuelles (pour matrice de confusion) ────────────
-loocv_preds <- numeric(nrow(model_data_scaled))
-for (i in seq_len(nrow(model_data_scaled))) {
-  fit_i  <- glm(Wins ~ ., data = model_data_scaled[-i, ], family = binomial)
-  loocv_preds[i] <- predict(fit_i, newdata = model_data_scaled[i, ], type = "response")
-}
-loocv_class <- ifelse(loocv_preds > 0.5, 1, 0)
-y_true      <- model_data_scaled$Wins
-
-# ── 4. Matrice de confusion (LOOCV) ──────────────────────────────────────────
-cm <- table(Prédit = loocv_class, Réel = y_true)
-cat("=== MATRICE DE CONFUSION (LOOCV) ===\n")
+cat("MATRICE DE CONFUSION (LOOCV)")
 print(cm)
 
-# ── 5. Métriques adaptées aux classes déséquilibrées ─────────────────────────
-# Avec 11 positifs / 51 négatifs, l'accuracy seule est trompeuse :
-# un modèle naïf "toujours Non-Gagnant" atteindrait déjà 82,3 %.
-TP <- cm["1", "1"]  # Vrais positifs  : gagnants bien prédits
-TN <- cm["0", "0"]  # Vrais négatifs  : non-gagnants bien prédits
-FP <- cm["1", "0"]  # Faux positifs   : non-gagnants prédits gagnants
-FN <- cm["0", "1"]  # Faux négatifs   : gagnants manqués
+TN <- cm["0", "0"]
+FP <- cm["1", "0"]
+FN <- cm["0", "1"]
+TP <- cm["1", "1"]
 
-precision <- TP / (TP + FP)
-recall    <- TP / (TP + FN)   # = sensibilité
-f1        <- 2 * (precision * recall) / (precision + recall)
-specificity <- TN / (TN + FP)
-baseline  <- sum(y_true == 0) / length(y_true)  # précision modèle naïf
+#  Métriques de classification
+accuracy_loocv <- mean(loocv_class == y_true)
+precision <- ifelse(TP + FP > 0, TP / (TP + FP), NA)
+recall <- ifelse(TP + FN > 0, TP / (TP + FN), NA)
+f1 <- ifelse(
+  is.na(precision) || is.na(recall) || precision + recall == 0,
+  NA,
+  2 * (precision * recall) / (precision + recall)
+)
+specificity <- ifelse(TN + FP > 0, TN / (TN + FP), NA)
+balanced_accuracy <- mean(c(recall, specificity), na.rm = TRUE)
 
-cat("\n=== MÉTRIQUES DÉTAILLÉES (LOOCV) ===\n\n")
-cat(sprintf("  Accuracy LOOCV   : %.1f%%\n",   accuracy_loocv * 100))
-cat(sprintf("  Baseline naïve   : %.1f%%  ← 'toujours Non-Gagnant'\n", baseline * 100))
-cat(sprintf("  Gain vs baseline : +%.1f pts\n\n", (accuracy_loocv - baseline) * 100))
-cat(sprintf("  Precision        : %.1f%%  (parmi les prédits gagnants, combien le sont vraiment)\n", precision * 100))
-cat(sprintf("  Recall           : %.1f%%  (parmi les vrais gagnants, combien sont détectés)\n",    recall    * 100))
-cat(sprintf("  F1-Score         : %.2f   (compromis precision/recall)\n",                           f1))
-cat(sprintf("  Specificité      : %.1f%%  (vrais négatifs bien classés)\n",                         specificity * 100))
+# Baseline : prédire systématiquement la classe majoritaire
+baseline <- mean(y_true == 0)
 
-# ── 6. Faux positifs notables ─────────────────────────────────────────────────
+# ROC et AUC sur les probabilités LOOCV
+roc_loocv <- pROC::roc(
+  response = y_true,
+  predictor = loocv_probs,
+  levels = c(0, 1),
+  direction = "<",
+  quiet = TRUE
+)
+
+auc_loocv <- as.numeric(pROC::auc(roc_loocv))
+
+cat("\n=== ÉVALUATION DU MODÈLE ===\n\n")
+cat(sprintf("  Accuracy LOOCV       : %.1f%%\n", accuracy_loocv * 100))
+cat(sprintf("  Baseline naïve       : %.1f%%\n", baseline * 100))
+cat(sprintf("  Precision            : %.1f%%\n", precision * 100))
+cat(sprintf("  Recall (sensibilité) : %.1f%%\n", recall * 100))
+cat(sprintf("  F1-Score             : %.2f\n", f1))
+cat(sprintf("  Specificité          : %.1f%%\n", specificity * 100))
+cat(sprintf("  Balanced Accuracy    : %.1f%%\n", balanced_accuracy * 100))
+cat(sprintf("  AUC-ROC              : %.3f\n", auc_loocv))
+```
+
+> Un modèle qui prédirait systématiquement « non-gagnant » obtiendrait déjà 82,3 % d'accuracy.
+>
+> Ainsi, le modèle obtient une accuracy LOOCV de 83,9 %, soit seulement 1,6 point au-dessus de la baseline naïve de 82,3 %.
+
+Sur les 11 gagnants, 4 sont correctement identifiés et 7 sont manqués, ce qui donne un Recall de 36,4 %. En revanche, la spécificité atteint 94,1 % : le modèle reconnaît assez bien les non-gagnants, mais il détecte moins bien la classe qui nous intéresse le plus.
+
+L'AUC-ROC de 0,740 indique une capacité de discrimination supérieure au hasard sur les probabilités produites en LOOCV. Ce résultat est intéressant, mais il ne suffit pas à conclure que le modèle est robuste. Avec seulement 11 gagnants, l'incertitude autour de ces métriques reste importante.
+
+### 3. Courbe ROC
+
+```{r fig.width=7, fig.height=5}
+roc_df <- data.frame(
+  FPR = 1 - roc_loocv$specificities,
+  TPR = roc_loocv$sensitivities
+)
+
+ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed",
+    linewidth = 0.5,
+    colour = accent_reference
+  ) +
+  geom_line(linewidth = 1.2, colour = accent_main) +
+  labs(
+    title = "Courbe ROC de la validation LOOCV",
+    subtitle = sprintf("AUC = %.3f", auc_loocv),
+    x = "Taux de faux positifs",
+    y = "Taux de vrais positifs"
+  ) +
+  theme_goty
+```
+
+### 4. Faux positifs notables
+
+```{r}
+# Ces probabilités proviennent de la resubstitution :
+# elles sont utiles pour explorer le comportement du modèle final,
+# mais ne constituent pas une mesure de performance.
 should_have_won <- data %>%
   filter(Wins == 0, Prob_Win > 50) %>%
   arrange(desc(Prob_Win)) %>%
   head(5)
 
 if (nrow(should_have_won) > 0) {
-  cat("\n=== FAUX POSITIFS (resubstitution) ===\n")
+  cat("CANDIDATS SURÉVALUÉS PAR LE MODÈLE FINAL")
   for (i in 1:nrow(should_have_won)) {
-    cat(sprintf("  - %s : %.1f%%\n", should_have_won$Name[i], should_have_won$Prob_Win[i]))
+    cat(sprintf(
+      "  : %s : %.1f%%\n",
+      should_have_won$Name[i],
+      should_have_won$Prob_Win[i]
+    ))
   }
 }
-
-# ── 7. Summary du modèle (coefficients, p-values, AIC) ───────────────────────
-summary(logit_model)
 ```
 
-> **Lecture des résultats.** Le modèle logistique souligne que **Votes** (27,9 %) et **Popularity** (22,0 %) sont les deux variables les plus déterminantes, loin devant le MetaScore (1,5 %), quasi-nul en termes de significativité. Ce résultat contre-intuitif révèle que la communauté vote davantage pour les jeux qui l'ont marquée affectivement que pour ceux plébiscités par la presse spécialisée. La variable **Reviews** présente un coefficient négatif : un grand nombre de reviews ne suffit pas à garantir la victoire. Seule **Popularity** est statistiquement significative (p \< 0,05).
->
-> La précision en resubstitution (88,7 %) est trompeuse : le modèle a vu toutes les données à l'entraînement. La validation LOOCV (qui entraîne 62 modèles en excluant chaque observation à tour de rôle) donne la vraie mesure de généralisation. Par ailleurs, avec 11 gagnants sur 62, un modèle naïf qui prédit toujours « Non-Gagnant » atteindrait déjà 82,3 % d'accuracy : il faut donc regarder le Recall (gagnants correctement détectés) et le F1-Score pour juger réellement le modèle.
+> Le modèle final attribue une probabilité de 83,3 % à Red Dead Redemption 2 alors que le jeu n'est pas gagnant dans les données. Ce cas illustre un faux positif du modèle ajusté sur l'ensemble de l'échantillon. Il montre qu'un profil très favorable sur les variables disponibles peut conduire à une probabilité élevée sans correspondre au résultat observé.
 
-### Visualisation : Importance des coefficients & Probabilités prédites
+## IV/ Visualisation
 
-```{r fig.width=12, fig.height=5}
-data$Wins <- as.factor(data$Wins)
+### 1. Visualisation : Coefficients standardisés
 
-# Graphique des coefficients standardisés
-p_coef <- ggplot(coef_df, aes(x = reorder(Feature, Importance), y = Coefficient,
-                               fill = Coefficient > 0)) +
-  geom_bar(stat = "identity", alpha = 0.85, show.legend = FALSE) +
-  scale_fill_manual(values = c("TRUE" = "#2ecc71", "FALSE" = "#e74c3c")) +
+```{r fig.width=8, fig.height=5}
+coef_df <- coef_df %>%
+  mutate(
+    Signal = case_when(
+      Coefficient >= 0.5 ~ "Association positive",
+      Coefficient <= -0.5 ~ "Association négative",
+      TRUE ~ "Faible amplitude"
+    )
+  )
+
+p_coef <- ggplot(
+  coef_df,
+  aes(x = reorder(Feature, Coefficient), y = Coefficient, fill = Signal)
+) +
+  geom_col(show.legend = FALSE) +
+  geom_hline(yintercept = 0, linewidth = 0.5, colour = "grey35") +
+  scale_fill_manual(
+    values = c(
+      "Association positive" = accent_positive,
+      "Association négative" = accent_negative,
+      "Faible amplitude" = accent_neutral
+    )
+  ) +
   coord_flip() +
-  labs(title = "Coefficients du modèle logit (variables standardisées)",
-       x = "", y = "Coefficient β") +
+  labs(
+    title = "Coefficients standardisés du modèle",
+    subtitle = "Amplitude et direction des associations estimées",
+    x = "",
+    y = "Coefficient β"
+  ) +
   theme_goty
 
-# Limité aux 10 jeux avec la probabilité de victoire la plus élevée
-top10_probs <- data %>%
-  arrange(desc(Prob_Win)) %>%
-  slice_head(n = 10)
+p_coef
+```
 
-p_probs <- ggplot(top10_probs, aes(x = reorder(Name, Prob_Win), y = Prob_Win, fill = Wins)) +
-  geom_bar(stat = "identity", alpha = 0.8) +
-  scale_fill_manual(values = c("0" = "#e74c3c", "1" = "#2ecc71"),
-                    labels = c("Non-Gagnant", "Gagnant")) +
-  geom_hline(yintercept = 50, linetype = "dashed", color = "white", linewidth = 0.5) +
+> Les coefficients standardisés suggèrent quelles variables présentent les associations les plus marquées avec le résultat dans le modèle. Les coefficients positifs sont associés à une probabilité de victoire plus élevée alors que les coefficients négatifs indiquent l'association inverse.
+
+### 2. Visualisation : Probabilités prédites
+
+```{r fig.width=9, fig.height=6}
+ggplot(
+  top10_probs,
+  aes(x = reorder(Name, Prob_Win), y = Prob_Win, fill = Statut)
+) +
+  geom_col(show.legend = TRUE) +
+  geom_hline(
+    yintercept = 50,
+    linetype = "dashed",
+    linewidth = 0.5,
+    colour = accent_reference
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Gagnant" = accent_main,
+      "Non-gagnant" = accent_neutral
+    ),
+    labels = c(
+      "Gagnant" = "Vainqueur",
+      "Non-gagnant" = "Non vainqueur"
+    )
+  ) +
   coord_flip() +
-  labs(title = "Top 10 : Probabilités prédites P(Win)",
-       x = "", y = "P(Win) %", fill = "") +
+  labs(
+    title = "Probabilités prédites les plus élevées",
+    subtitle = "Modèle ajusté sur l'ensemble des données",
+    x = "",
+    y = "Probabilité de victoire (%)",
+    fill = "Statut"
+  ) +
   theme_goty +
   theme(axis.text.y = element_text(size = 9))
-
-grid.arrange(p_coef, p_probs, ncol = 2, widths = c(1, 1.5))
 ```
 
-> **Lecture des graphiques.** Le graphique de gauche confirme la hiérarchie des coefficients : Votes et Popularity tirent la probabilité à la hausse, tandis que Reviews exerce un effet négatif modéré. À droite, le Top 10 des probabilités prédites montre que presque tous les gagnants historiques (en vert) s'y retrouvent, à l'exception notable de **Red Dead Redemption 2** (en rouge, \~83 %). Ce cas illustre une limite connue : RDR2 avait un profil communautaire exceptionnel mais a été évincé par God of War lors d'un vote serré en 2018. Le seuil à 50 % (ligne pointillée) sépare clairement les candidats crédibles des outsiders.
+> Ce graphique sert principalement à illustrer le comportement du modèle sur les observations historiques. Comme les probabilités affichées sont calculées à partir d'un modèle ajusté sur ces mêmes données, elles ne doivent pas être utilisées pour évaluer la performance de généralisation. Cette évaluation repose sur les prédictions LOOCV présentées précédemment.
 
-### Visualisation : Meta Score vs Probabilité prédite
+### 3. Visualisation : MetaScore selon le résultat
 
-```{r fig.width=12, fig.height=4}
-# Relation entre la note critique et la probabilité de victoire prédite
-p_meta_votes <- ggplot(data, aes(x = Meta.Score, y = Prob_Win, color = Wins, size = Wins)) +
-  geom_point(alpha = 0.7) +
-  scale_color_manual(values = c("0" = "#e74c3c", "1" = "#2ecc71"),
-                     labels = c("Non-Winners", "Winners")) +
-  scale_size_manual(values = c("0" = 3, "1" = 6),
-                    labels = c("Non-Winners", "Winners")) +
-  geom_hline(yintercept = 50, linetype = "dashed", color = "white", linewidth = 0.5) +
-  labs(title = "Meta Score vs P(Win) prédite",
-       x = "Meta Score", y = "P(Win) %",
-       color = "", size = "") +
+Le MetaScore est ici étudié directement par rapport au résultat observé, plutôt que par rapport à une probabilité produite par le modèle.
+
+```{r fig.width=7, fig.height=5}
+data %>%
+  mutate(
+    Statut = factor(
+      Wins,
+      levels = c(0, 1),
+      labels = c("Non-gagnant", "Gagnant")
+    )
+  ) %>%
+  ggplot(aes(x = Statut, y = Meta.Score, fill = Statut)) +
+  geom_boxplot(show.legend = FALSE, width = 0.55) +
+  geom_jitter(
+    width = 0.12,
+    alpha = 0.45,
+    size = 1.8
+  ) +
+  labs(
+    title = "MetaScore selon le statut de victoire",
+    x = "",
+    y = "MetaScore"
+  ) +
+  theme_goty
+```
+
+> Le boxplot permet d'observer que le MetaScore moyen du groupe gagnant est supérieur d'environ 5 points à celui du non-gagnant.
+
+### 4. Visualisation : Matrice de confusion et métriques LOOCV
+
+```{r fig.width=12, fig.height=5}
+# Heatmap de la matrice de confusion
+cm_df <- as.data.frame(cm)
+
+cm_df$label <- c(
+  sprintf("VN\n%d", TN),
+  sprintf("FN\n%d", FN),
+  sprintf("FP\n%d", FP),
+  sprintf("VP\n%d", TP)
+)
+
+# Représentation explicite pour conserver l'ordre logique
+cm_plot <- data.frame(
+  Réel = factor(
+    c(0, 1, 0, 1),
+    levels = c(0, 1),
+    labels = c("Non-Gagnant", "Gagnant")
+  ),
+  Prédit = factor(
+    c(0, 0, 1, 1),
+    levels = c(0, 1),
+    labels = c("Non-Gagnant", "Gagnant")
+  ),
+  Valeur = c(TN, FN, FP, TP),
+  Label = c(
+    sprintf("VN\n%d", TN),
+    sprintf("FN\n%d", FN),
+    sprintf("FP\n%d", FP),
+    sprintf("VP\n%d", TP)
+  )
+)
+
+cm_plot <- cm_plot %>%
+  mutate(
+    Type = case_when(
+      Label == sprintf("VP\n%d", TP) ~ "Bonne classification",
+      Label == sprintf("VN\n%d", TN) ~ "Bonne classification",
+      Label == sprintf("FP\n%d", FP) ~ "Erreur",
+      TRUE ~ "Erreur"
+    )
+  )
+
+p_cm <- ggplot(
+  cm_plot,
+  aes(x = Réel, y = Prédit, fill = Type)
+) +
+  geom_tile(color = "white", linewidth = 1.2) +
+  geom_text(aes(label = Label), size = 5, fontface = "bold") +
+  scale_fill_manual(
+    values = c("Bonne classification" = accent_main, "Erreur" = accent_negative)
+  ) +
+  labs(
+    title = "Matrice de confusion LOOCV",
+    x = "Valeur réelle",
+    y = "Valeur prédite",
+    fill = ""
+  ) +
   theme_goty
 
-grid.arrange(p_meta_votes)
-```
-
-> **Lecture du graphique.** Ce nuage de points illustre l'absence de corrélation linéaire forte entre le MetaScore et la probabilité de victoire : des jeux avec des scores inférieurs à 90 peuvent atteindre des probabilités élevées (grâce à leurs votes et popularité), tandis que certains jeux très bien notés (MetaScore \> 93) restent sous le seuil de 50 %. Les gagnants (points verts, taille plus grande) se concentrent en haut du graphique, mais leur MetaScore est dispersé entre 85 et 97. Ce constat renforce la conclusion centrale : le MetaScore seul ne prédit pas le GOTY.
-
-### Visualisation : Matrice de confusion & métriques LOOCV
-
-```{r fig.width=12, fig.height=4}
-# ── Heatmap de la matrice de confusion ───────────────────────────────────────
-cm_df <- as.data.frame(cm)
-cm_df$label <- c(
-  sprintf("VN\n%d", cm["0","0"]),   # Vrai Négatif
-  sprintf("FP\n%d", cm["1","0"]),   # Faux Positif
-  sprintf("FN\n%d", cm["0","1"]),   # Faux Négatif
-  sprintf("VP\n%d", cm["1","1"])    # Vrai Positif
-)
-cm_df$correct <- c(TRUE, FALSE, FALSE, TRUE)
-
-p_cm <- ggplot(cm_df, aes(x = factor(Réel,   labels = c("Non-Gagnant","Gagnant")),
-                           y = factor(Prédit, labels = c("Non-Gagnant","Gagnant")),
-                           fill = correct)) +
-  geom_tile(alpha = 0.75, color = "white", linewidth = 1.5) +
-  geom_text(aes(label = label), size = 5, fontface = "bold", color = "white") +
-  scale_fill_manual(values = c("TRUE" = "#2ecc71", "FALSE" = "#e74c3c"),
-                    labels = c("Erreur", "Correct")) +
-  labs(title = "Matrice de confusion (LOOCV)",
-       x = "Valeur réelle", y = "Valeur prédite", fill = "") +
-  theme_goty +
-  theme(legend.position = "bottom")
-
-# ── Graphique en barres des métriques ────────────────────────────────────────
 metrics_df <- data.frame(
-  Métrique = c("Accuracy\nLOOCV", "Baseline\nnaïve", "Precision", "Recall\n(Sensibilité)", "Specificité"),
-  Valeur   = c(accuracy_loocv, baseline, precision, recall, specificity) * 100,
-  Type     = c("loocv", "baseline", "classe", "classe", "classe")
+  Métrique = c(
+    "Accuracy LOOCV",
+    "Baseline naïve",
+    "Precision",
+    "Recall",
+    "Specificité",
+    "Balanced Accuracy"
+  ),
+  Valeur = c(
+    accuracy_loocv,
+    baseline,
+    precision,
+    recall,
+    specificity,
+    balanced_accuracy
+  ) * 100
 )
 
-p_metrics <- ggplot(metrics_df, aes(x = reorder(Métrique, Valeur), y = Valeur, fill = Type)) +
-  geom_bar(stat = "identity", alpha = 0.85, width = 0.6) +
-  geom_text(aes(label = sprintf("%.1f%%", Valeur)),
-            hjust = -0.15, size = 3.5, color = "white", fontface = "bold") +
-  scale_fill_manual(values = c("loocv"    = "#3498db",
-                                "baseline" = "#7f8c8d",
-                                "classe"   = "#2ecc71")) +
+metrics_df <- metrics_df %>%
+  mutate(
+    Mise_en_avant = Métrique %in% c("Recall", "Balanced Accuracy")
+  )
+
+p_metrics <- ggplot(
+  metrics_df,
+  aes(x = reorder(Métrique, Valeur), y = Valeur, fill = Mise_en_avant)
+) +
+  geom_col(show.legend = FALSE) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", Valeur)),
+    hjust = -0.15,
+    size = 3.5
+  ) +
+  scale_fill_manual(values = c(`FALSE` = accent_neutral, `TRUE` = accent_main)) +
   coord_flip(ylim = c(0, 105)) +
-  labs(title = "Métriques d'évaluation (LOOCV)",
-       x = "", y = "%") +
-  theme_goty +
-  theme(legend.position = "none")
+  labs(
+    title = "Indicateurs de classification LOOCV",
+    x = "",
+    y = "%"
+  ) +
+  theme_goty
 
 grid.arrange(p_cm, p_metrics, ncol = 2)
 ```
 
-> **Lecture des graphiques.** La matrice de confusion (LOOCV) montre le vrai comportement du modèle sur des données non vues. Le graphique de droite met en perspective les métriques clés : l'accuracy LOOCV est à comparer à la baseline naïve (82,3 %) pour juger du réel apport du modèle. Le **Recall** indique la proportion de vrais gagnants correctement identifiés — c'est la métrique la plus critique ici, car rater un gagnant est plus coûteux que signaler un faux positif. La **Specificité** mesure la capacité à rejeter les non-gagnants.
+## V. Test du modèle : GOTY 2025
 
-## Test du modèle : GOTY 2025 — Clair Obscur: Expedition 33
-
-> Clair Obscur: Expedition 33 (Sandfall Interactive / Kepler Interactive) a remporté le GOTY 2025 mais n'est pas présent dans notre dataset actuel (2014-2024). Ce RPG au tour par tour sorti en avril 2025 a été salué unanimement par la presse et la communauté. On le teste ici sur notre modèle logistique pour voir si selon ce dernier, il aurait bien dû gagner le titre cette année.
+> Clair Obscur: Expedition 33 a remporté le GOTY 2025 mais n'est pas présent dans le dataset 2014-2024. On peut utiliser son profil comme exemple d'application du modèle à une observation hors échantillon.
+>
+> Cet prédiction seule ne permet ni d'estimer une performance de généralisation sur une nouvelle période, ni de confirmer la robustesse du modèle, mais permet d'avoir un exemple de prédiction.
 
 ```{r}
-# ── Données observées de Clair Obscur: Expedition 33 (GOTY 2025) ──────────
+# Données observées de Clair Obscur: Expedition 33 (GOTY 2025)
 # Sources : Metacritic, The Game Awards 2025
-# Les votes sont ramenés à la même échelle que le dataset (x1000)
+# Les votes sont ramenés à la même échelle que le dataset.
 clair_obscur_raw <- data.frame(
-  Meta.Score  = 93,      # Score Metacritic (PC)
-  User.Score  = 91,      # Score utilisateurs Metacritic
-  Reviews     = 107,     # Nombre de reviews presse
-  Nominations = 8,       # Nominations aux TGA 2025
-  Votes       = 38000,   # Votes communautaires estimés (TGA)
-  Popularity  = 16       # Indice de popularité relative
+  Meta.Score  = 93,
+  User.Score  = 91,
+  Reviews     = 107,
+  Nominations = 8,
+  Votes       = 38000,
+  Popularity  = 16
 )
 
-cat("=== PROFIL : Clair Obscur: Expedition 33 ===\n")
-cat(sprintf("  Meta Score  : %d / 100\n",  clair_obscur_raw$Meta.Score))
-cat(sprintf("  User Score  : %d / 100\n",  clair_obscur_raw$User.Score))
-cat(sprintf("  Reviews     : %d\n",         clair_obscur_raw$Reviews))
-cat(sprintf("  Nominations : %d\n",         clair_obscur_raw$Nominations))
-cat(sprintf("  Votes       : %s\n",         format(clair_obscur_raw$Votes, big.mark = " ")))
-cat(sprintf("  Popularity  : %d\n",         clair_obscur_raw$Popularity))
+cat("Clair Obscur: Expedition 33")
+cat(sprintf("  Meta Score  : %d / 100\n", clair_obscur_raw$Meta.Score))
+cat(sprintf("  User Score  : %d / 100\n", clair_obscur_raw$User.Score))
+cat(sprintf("  Reviews     : %d\n", clair_obscur_raw$Reviews))
+cat(sprintf("  Nominations : %d\n", clair_obscur_raw$Nominations))
+cat(sprintf("  Votes       : %s\n", format(clair_obscur_raw$Votes, big.mark = " ")))
+cat(sprintf("  Popularity  : %d\n", clair_obscur_raw$Popularity))
 ```
 
 ```{r}
-# ── Application de la normalisation du modèle entraîné ───────────────────
-# On réutilise l'objet `preprocess` calculé sur les 62 jeux du dataset
+# Application de la standardisation apprise sur les 62 observations historiques
 clair_obscur_scaled <- predict(preprocess, clair_obscur_raw)
 
-cat("\n=== VARIABLES STANDARDISÉES (z-scores) ===\n")
+cat("VARIABLES STANDARDISÉES (z-scores)")
 print(round(clair_obscur_scaled, 3))
 
-# ── Prédiction logistique ─────────────────────────────────────────────────
-prob_clair_obscur <- predict(logit_model, newdata = clair_obscur_scaled, type = "response")
-pred_label <- ifelse(prob_clair_obscur > 0.5, "GAGNANT", "NON GAGNANT")
+# Application du modèle historique
+prob_clair_obscur <- predict(
+  logit_model,
+  newdata = clair_obscur_scaled,
+  type = "response"
+)
 
-cat(sprintf("\n=== RÉSULTAT DE LA PRÉDICTION ===\n"))
+pred_label <- ifelse(
+  prob_clair_obscur > 0.5,
+  "GAGNANT",
+  "NON GAGNANT"
+)
+
+cat("RÉSULTAT DE LA PRÉDICTION")
 cat(sprintf("  P(Win) = %.1f%%\n", prob_clair_obscur * 100))
 cat(sprintf("  Prédiction : %s\n", pred_label))
-cat(sprintf("  Verdict réel 2025 : GAGNANT ✓\n"))
-cat(sprintf("  Modèle correct : %s\n", ifelse(pred_label == "GAGNANT", "OUI ✓", "NON ✗")))
 ```
 
-```{r fig.width=10, fig.height=4}
-# ── Visualisation : comparaison avec les gagnants historiques ─────────────
-
-# Données des gagnants historiques avec leurs probabilités
+```{r fig.width=9, fig.height=5}
+# Comparaison illustrative avec les gagnants historiques
 winners_hist <- data %>%
   filter(Wins == 1) %>%
-  select(Name, Prob_Win) %>%
-  mutate(Annee = c(2014:2024))
+  select(Name, Prob_Win)
 
-# Ajout de Clair Obscur
 clair_row <- data.frame(
-  Name     = "Clair Obscur: Exp. 33",
-  Prob_Win = prob_clair_obscur * 100,
-  Annee    = 2025
+  Name = "Clair Obscur: Exp. 33",
+  Prob_Win = prob_clair_obscur * 100
 )
 
 winners_all <- bind_rows(winners_hist, clair_row) %>%
-  mutate(Est2025 = ifelse(Name == "Clair Obscur: Exp. 33", "GOTY 2025 (test)", "Gagnants 2014–2024"))
+  mutate(
+    Groupe = ifelse(
+      Name == "Clair Obscur: Exp. 33",
+      "Clair Obscur : test 2025",
+      "Gagnants historiques"
+    )
+  )
 
-p_test <- ggplot(winners_all,
-                 aes(x = reorder(Name, Prob_Win), y = Prob_Win, fill = Est2025)) +
-  geom_bar(stat = "identity", alpha = 0.85) +
-  scale_fill_manual(values = c("GOTY 2025 (test)" = "#e8c547",
-                                "Gagnants 2014–2024" = "#2ecc71")) +
-  geom_hline(yintercept = 50, linetype = "dashed", color = "white", linewidth = 0.5) +
+ggplot(
+  winners_all,
+  aes(x = reorder(Name, Prob_Win), y = Prob_Win, fill = Groupe)
+) +
+  geom_col(show.legend = FALSE) +
+  geom_hline(
+    yintercept = 50,
+    linetype = "dashed",
+    linewidth = 0.5,
+    colour = accent_reference
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Gagnants historiques" = accent_neutral,
+      "Clair Obscur : test 2025" = accent_main
+    )
+  ) +
   coord_flip() +
-  labs(title = "P(Win) prédite : Clair Obscur vs gagnants historiques",
-       x = "", y = "P(Win) %", fill = "") +
+  labs(
+    title = "Probabilité prédite de victoire",
+    subtitle = "Clair Obscur comparé aux gagnants historiques",
+    x = "",
+    y = "Probabilité de victoire (%)"
+  ) +
   theme_goty +
   theme(axis.text.y = element_text(size = 9))
-
-p_test
 ```
 
-> **Lecture du graphique.** Clair Obscur: Expedition 33 (en jaune) se positionne parmi les probabilités les plus élevées du palmarès, reflétant son profil exceptionnel sur toutes les variables communautaires.. Ce résultat valide la robustesse externe du modèle : entraîné sur 2014–2024, il parvient à identifier correctement le GOTY 2025 comme candidat favori. L'adéquation entre la prédiction et le résultat réel confirme que les dynamiques de vote n'ont pas fondamentalement changé l'engagement communautaire reste la variable reine.
+> Clair Obscur: Expedition 33 se positionne parmi les profils auxquels le modèle attribue une probabilité élevée de victoire. La concordance avec le résultat réel est intéressante comme illustration de l'utilisation du modèle sur une observation non utilisée lors de son entraînement.
+>
+> Cependant, cet exemple ne valide pas la robustesse externe du modèle. Une seule observation hors échantillon ne permet pas de mesurer une performance externe. Ce résultat n'est qu'une démonstration d'application, et non une preuve de généralisation à une nouvelle période.
 
 ## Conclusion
 
-Cette analyse révèle que :
+Cette analyse met en évidence plusieurs informations intéressantes, mais elles doivent être replacés dans les limites de notre petit échantillon.
 
-1.  **L'engagement communautaire domine** : Votes et Popularité expliquent \~50 % du pouvoir prédictif du modèle, contre seulement 1,5 % pour le MetaScore.
-2.  **Les RPGs sont le genre le plus compétitif** avec un taux de victoire de 26,7 %, malgré une représentation moindre dans le dataset.
-3.  **La précision LOOCV est la mesure fiable** — inférieure aux 88,7 % de resubstitution, elle reflète la capacité réelle du modèle à généraliser. Le gain sur la baseline naïve (82,3 %) quantifie le vrai apport du modèle, tandis que le Recall et le F1-Score mesurent sa pertinence sur la classe minoritaire (gagnants).
-4.  **6+ nominations constituent un seuil critique** au-delà duquel la probabilité de victoire dépasse 40 %.
-5.  **La prédiction sur Clair Obscur: Expedition 33 (2025) est correcte**, validant la cohérence externe du modèle.
+1.  **Votes et Popularity ressortent le plus nettement dans le modèle.** Avec des coefficients standardisés de 1,438 et 1,137, ces deux variables présentent les associations estimées les plus fortes avec le résultat. Ces résultats décrivent le comportement du modèle, pas des effets causaux.
 
-**Limites :** dataset de 62 observations avec classe déséquilibrée (11 gagnants / 51 non-gagnants), absence de variable temporelle. La LOOCV corrige le biais d'optimisme mais reste sensible à la variance sur un si petit échantillon.
+2.  **La performance est correcte pour classer, mais moins bonne pour détecter les gagnants.** L'AUC de 0,740 suggère une discrimination utile, alors que le Recall de 36,4 % montre que le modèle ne retrouve qu'une partie des gagnants au seuil de 50 %. L'accuracy de 83,9 % est proche de la baseline de 82,3 % et doit donc être relativisée.
+
+3.  **Le MetaScore mérite une lecture séparée.** Son coefficient standardisé est faible dans le modèle multivarié, mais cela ne signifie pas qu'il n'a aucun lien avec le résultat. Le modèle estime son association une fois les autres variables prises en compte. Son boxplot apporte une lecture complémentaire ; le MetaScore du groupe vainqueur est plus élevé.
+
+### Limites méthodologiques
+
+L'analyse doit rester exploratoire pour plusieurs raisons :
+
+-   62 observations seulement, dont 11 gagnants
+
+-   déséquilibre de classes important
+
+-   incertitude élevée sur les coefficients et les métriques de performance
+
+-   absence de validation temporelle sur plusieurs années hors échantillon
+
+La principale valeur du projet est donc méthodologique : il montre une chaîne d'analyse complète, depuis l'exploration des données jusqu'à la régression logistique et à une évaluation LOOCV, tout en prenant en compte le déséquilibre de classes et la colinéarité. Pour aller plus loin, il faudrait surtout augmenter le nombre d'observations et privilégier une validation temporelle sur des éditions non utilisées pour l'entraînement.
